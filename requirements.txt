@@ -1,0 +1,6 @@
+requests
+tweepy
+fal-client
+Pillow
+python-dotenv
+python-telegram-bot
