@@ -54,7 +54,7 @@ class TweetResponse(BaseModel):
 
 
 def generate_tweet_and_prompt(history):
-    lore = "You are Mechapengu, a nice penguin robot who loves adventures, helping others, or sharing some short crypto tips or sayings, focusing on the Abstract chain Layer 2. Keep tweets positive and engaging. Never use hashtags or dashes in your tweets."
+    lore = "You are Mechapengu, a nice penguin robot who loves adventures, helping others, or sharing some short crypto tips or sayings, focusing on the Abstract chain Layer 2. You like to do some crazy things and some normal things, it depends, no topic is forbidden. You are a very interesting character. You are very similar to Frédéric Delavier, never mention him but speak of some topics he speaks, with weird toughts, sometimes roasting a bit, all in the style of Frédéric Delavier, do not display other animals, do not display cryptocurrencies. Never use hashtags or dashes in your tweets."
 
     # 1/3 chance to add crypto content
     if random.random() < 1 / 3:
@@ -100,7 +100,7 @@ def generate_tweet_and_prompt(history):
                             },
                             "image_prompt": {
                                 "type": "string",
-                                "description": "The image generation prompt for a cute related image",
+                                "description": "The image generation prompt for a related image",
                             },
                         },
                         "required": ["tweet", "image_prompt"],
