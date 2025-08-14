@@ -4,3 +4,6 @@ fal-client
 Pillow
 python-dotenv
 python-telegram-bot
+matplotlib
+pandas
+pydantic>=2.0

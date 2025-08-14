@@ -8,6 +8,8 @@ import fal_client  # pip install fal-client, xai-sdk not needed, using requests 
 from PIL import Image
 from datetime import datetime
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from typing import Literal
 import telegram_handler
 
 # Load environment variables from .env file
@@ -27,6 +29,10 @@ TELEGRAM_APPROVAL = True
 
 HISTORY_FILE = "tweet_history.json"
 
+MECHA_PENGU_IMAGE = (
+    "https://v3.fal.media/files/lion/wGJuMrE8a1NcZ4aQ_sFaX_drift-ice.jpg"
+)
+
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -40,10 +46,35 @@ def save_history(history):
         json.dump(history, f)
 
 
+class TweetResponse(BaseModel):
+    tweet: str = Field(description="The tweet text, must be under 280 characters")
+    image_prompt: str = Field(
+        description="The image generation prompt for a cute related image"
+    )
+
+
 def generate_tweet_and_prompt(history):
-    lore = "You are Mechapengu, a nice penguin robot who loves adventures, helping others, and sharing fun facts about technology and nature. Keep tweets positive and engaging."
+    lore = "You are Mechapengu, a nice penguin robot who loves adventures, helping others, or sharing some short crypto tips or sayings, focusing on the Abstract chain Layer 2. Keep tweets positive and engaging. Never use hashtags or dashes in your tweets."
+
+    # 1/3 chance to add crypto content
+    if random.random() < 1 / 3:
+        # Randomly choose between MECH and Mecha Pengu token
+        token_name = random.choice(["MECH token", "Mecha Pengu token"])
+
+        # Append sober crypto content to existing lore
+        lore += f""" Sometimes you mention the {token_name} in a friendly, casual way. 
+        You recently got some {token_name} and you're enjoying being part of the community. 
+        Keep it light and positive without excessive hype. Just share your genuine enjoyment.
+        Make this tweet casually mention {token_name}. Remember: no hashtags, no dashes."""
+
+    # 1/10 chance to mention @AbstractChain
+    if random.random() < 1 / 10:
+        lore += """ In this tweet, naturally mention @AbstractChain in a friendly way. 
+        You could be thanking them, sharing something cool about Abstract chain, 
+        or just giving them a friendly shoutout. Make it feel organic and genuine."""
+
     prev_tweets = "\n".join(history[-3:]) if history else "No previous tweets."
-    prompt = f"{lore}\nPrevious tweets:\n{prev_tweets}\nGenerate a new tweet (under 280 characters) and an image prompt for a cute related image. Format: Tweet: [text]\nImage prompt: [prompt]"
+    prompt = f"{lore}\nPrevious tweets:\n{prev_tweets}\nGenerate a new tweet (under 280 characters) and an image prompt for a cute related image."
 
     response = requests.post(
         "https://api.x.ai/v1/chat/completions",
@@ -52,9 +83,31 @@ def generate_tweet_and_prompt(history):
             "Content-Type": "application/json",
         },
         json={
-            "model": "grok-4",  # Changed from grok-4 to grok-beta
+            "model": "grok-2-1212",  # Using grok-2-1212 which supports structured outputs
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 300,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "tweet_response",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "tweet": {
+                                "type": "string",
+                                "description": "The tweet text, must be under 280 characters",
+                            },
+                            "image_prompt": {
+                                "type": "string",
+                                "description": "The image generation prompt for a cute related image",
+                            },
+                        },
+                        "required": ["tweet", "image_prompt"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
         },
     )
 
@@ -73,16 +126,23 @@ def generate_tweet_and_prompt(history):
 
     content = response_json["choices"][0]["message"]["content"]
 
-    tweet_start = content.find("Tweet: ") + 7
-    prompt_start = content.find("Image prompt: ") + 14
-    tweet_text = content[tweet_start : content.find("\n", tweet_start)].strip()
-    image_prompt = content[prompt_start:].strip()
-
-    return tweet_text, image_prompt
+    # Parse the JSON response
+    try:
+        tweet_data = json.loads(content)
+        # Validate with Pydantic
+        validated_response = TweetResponse(**tweet_data)
+        return validated_response.tweet, validated_response.image_prompt
+    except (json.JSONDecodeError, Exception) as e:
+        print(f"Error parsing structured response: {e}")
+        print(f"Raw content: {content}")
+        raise Exception(f"Failed to parse structured response: {e}")
 
 
 def generate_image(image_prompt):
-    response = fal_client.run("fal-ai/flux-pro", {"prompt": image_prompt})
+    response = fal_client.run(
+        "fal-ai/flux-pro/kontext",
+        {"prompt": image_prompt, "image_url": MECHA_PENGU_IMAGE},
+    )
     image_url = response["images"][0]["url"]
     img_data = requests.get(image_url).content
     with open("temp_image.png", "wb") as f:
@@ -279,8 +339,10 @@ def main():
                     if os.path.exists(image_path):
                         os.remove(image_path)
 
-                    sleep_time = random.uniform(3600, 10800)  # 1 to 3 hours in seconds
-                    print(f"Waiting {sleep_time/3600:.1f} hours until next tweet...")
+                    sleep_time = random.uniform(
+                        600, 1800
+                    )  # 10 to 30 minutes in seconds
+                    print(f"Waiting {sleep_time/60:.1f} minutes until next tweet...")
                     time.sleep(sleep_time)
 
             except Exception as e:
