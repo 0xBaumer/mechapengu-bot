@@ -131,7 +131,31 @@ def generate_tweet_and_prompt(history):
         tweet_data = json.loads(content)
         # Validate with Pydantic
         validated_response = TweetResponse(**tweet_data)
-        return validated_response.tweet, validated_response.image_prompt
+
+        # Modify image prompt if this is a pengu-bot tweet
+        image_prompt = validated_response.image_prompt
+
+        # Add water color specification if water-related keywords are present
+        water_keywords = [
+            "water",
+            "ocean",
+            "sea",
+            "lake",
+            "river",
+            "swimming",
+            "diving",
+            "underwater",
+            "waves",
+            "beach",
+            "shore",
+            "splash",
+            "aquatic",
+            "marine",
+        ]
+        if any(keyword in image_prompt.lower() for keyword in water_keywords):
+            image_prompt += " Any water in the scene should be rendered in a vibrant medium spring green color (#00fa9a), giving it a unique, stylized appearance."
+
+        return validated_response.tweet, image_prompt
     except (json.JSONDecodeError, Exception) as e:
         print(f"Error parsing structured response: {e}")
         print(f"Raw content: {content}")
