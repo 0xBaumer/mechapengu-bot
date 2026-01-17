@@ -294,8 +294,10 @@ def main():
 
                             if result["action"] == "approve":
                                 print("Tweet approved! Posting to Twitter...")
-                                post_tweet(tweet_text, image_path)
-                                history.append(tweet_text)
+                                # Use the tweet text from result (in case it was edited)
+                                final_tweet_text = result["tweet_data"]["text"]
+                                post_tweet(final_tweet_text, image_path)
+                                history.append(final_tweet_text)
                                 save_history(history)
                                 print(f"Tweet posted successfully!")
 
@@ -331,8 +333,10 @@ def main():
 
                             if result["action"] == "approve":
                                 print("Tweet approved! Posting to Twitter...")
-                                post_tweet(tweet_text, image_path)
-                                history.append(tweet_text)
+                                # Use the tweet text from result (in case it was edited)
+                                final_tweet_text = result["tweet_data"]["text"]
+                                post_tweet(final_tweet_text, image_path)
+                                history.append(final_tweet_text)
                                 save_history(history)
                                 print(f"Tweet posted successfully!")
 
