@@ -68,10 +68,9 @@ def generate_tweet_and_prompt(history):
     
     Focus on Abstract chain L2 and the broader crypto ecosystem trends."""
 
-    # 2/3 chance to add MECH/Mecha Pengu content
+    # 2/3 chance to add MECH content
     if random.random() < 2 / 3:
-        token_name = random.choice(["$MECH", "$MECHAPENGU", "Mecha Pengu"])
-        lore += f""" This tweet should mention {token_name} in a hype, memey way. 
+        lore += """ This tweet should mention $MECH in a hype, memey way. 
         Talk about it mooning, being undervalued, or being the next 100x. 
         Make it funny and engaging. Get people to ape in."""
 
