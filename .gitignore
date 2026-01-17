@@ -59,7 +59,6 @@ env/
 .ipynb_checkpoints
 
 # pyenv
-.python-version
 
 # Celery stuff
 celerybeat-schedule
