@@ -371,8 +371,8 @@ def main():
                         os.remove(image_path)
 
                     sleep_time = random.uniform(
-                        600, 1800
-                    )  # 10 to 30 minutes in seconds
+                        1800, 3600
+                    )  # 30 to 60 minutes in seconds
                     print(f"Waiting {sleep_time/60:.1f} minutes until next tweet...")
                     time.sleep(sleep_time)
 
