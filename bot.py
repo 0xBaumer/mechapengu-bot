@@ -5,7 +5,7 @@ import time
 import requests
 import tweepy
 import fal_client  # pip install fal-client, xai-sdk not needed, using requests for xAI
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -49,24 +49,49 @@ def save_history(history):
 class TweetResponse(BaseModel):
     tweet: str = Field(description="The tweet text, must be under 280 characters")
     image_prompt: str = Field(
-        description="The image generation prompt for a cute related image"
+        description="The image generation prompt for a related image"
     )
+    meme_top_text: str = Field(default="", description="Top text for meme format (if meme)")
+    meme_bottom_text: str = Field(default="", description="Bottom text for meme format (if meme)")
 
 
 def generate_tweet_and_prompt(history):
-    lore = """You are Mechapengu, a degen penguin robot in the crypto space. You're here to farm engagement and make MECH/Mecha Pengu token moon. 
+    # 50% chance to make a classic meme format
+    is_meme_format = random.random() < 0.5
     
-    Your style:
-    - Post spicy crypto memes and trending topics from crypto Twitter
-    - React to market moves, pumps, dumps, and crypto drama
-    - Roast rugs, scams, and paper hands
-    - Hype bullish narratives (AI agents, L2s, DeFi, memecoins)
-    - Use crypto slang: gm, wagmi, ngmi, ser, anon, rekt, giga brain, cope, fud, ape, degen, etc.
-    - Be funny, edgy, sometimes unhinged
-    - No hashtags or dashes in tweets
-    - Keep it memeable and viral-worthy
-    
-    Focus on Abstract chain L2 and the broader crypto ecosystem trends."""
+    if is_meme_format:
+        lore = """You are Mechapengu, a degen meme lord. Generate a CLASSIC MEME FORMAT post.
+        
+        MEME RULES:
+        - Create stupid, provocative, trending crypto memes
+        - Use classic meme templates mentally (Drake, Distracted Boyfriend, Expanding Brain, etc.)
+        - Generate TOP TEXT and BOTTOM TEXT for the meme image (short, punchy, ALL CAPS style)
+        - The tweet text is the caption/context (can be short or just emojis)
+        - Make it about crypto trends, $MECH, market moves, or degen culture
+        - Be unhinged, stupid, and provocative - what actually works on Twitter
+        - NO hashtags or dashes
+        
+        Your response must include:
+        - tweet: Short caption for the meme (can be emojis or brief text)
+        - image_prompt: Description of meme image (the visual, not the text)
+        - meme_top_text: Text for TOP of image (short, punchy)
+        - meme_bottom_text: Text for BOTTOM of image (short, punchy)"""
+    else:
+        lore = """You are Mechapengu, a degen penguin robot in the crypto space. You're here to farm engagement and make MECH/Mecha Pengu token moon. 
+        
+        Your style:
+        - Post spicy crypto memes and trending topics from crypto Twitter
+        - React to market moves, pumps, dumps, and crypto drama
+        - Roast rugs, scams, and paper hands
+        - Hype bullish narratives (AI agents, L2s, DeFi, memecoins)
+        - Use crypto slang: gm, wagmi, ngmi, ser, anon, rekt, giga brain, cope, fud, ape, degen, etc.
+        - Be funny, edgy, sometimes unhinged
+        - No hashtags or dashes in tweets
+        - Keep it memeable and viral-worthy
+        
+        Focus on Abstract chain L2 and the broader crypto ecosystem trends.
+        
+        Set meme_top_text and meme_bottom_text to empty strings."""
 
     # 2/3 chance to add MECH content
     if random.random() < 2 / 3:
@@ -109,8 +134,16 @@ def generate_tweet_and_prompt(history):
                                 "type": "string",
                                 "description": "The image generation prompt for a related image",
                             },
+                            "meme_top_text": {
+                                "type": "string",
+                                "description": "Top text for meme format (empty if not a meme)",
+                            },
+                            "meme_bottom_text": {
+                                "type": "string",
+                                "description": "Bottom text for meme format (empty if not a meme)",
+                            },
                         },
-                        "required": ["tweet", "image_prompt"],
+                        "required": ["tweet", "image_prompt", "meme_top_text", "meme_bottom_text"],
                         "additionalProperties": False,
                     },
                 },
@@ -162,7 +195,13 @@ def generate_tweet_and_prompt(history):
         if any(keyword in image_prompt.lower() for keyword in water_keywords):
             image_prompt += " Any water in the scene should be rendered in a vibrant medium spring green color (#00fa9a), giving it a unique, stylized appearance."
 
-        return validated_response.tweet, image_prompt
+        return (
+            validated_response.tweet,
+            image_prompt,
+            validated_response.meme_top_text,
+            validated_response.meme_bottom_text,
+            is_meme_format
+        )
     except (json.JSONDecodeError, Exception) as e:
         print(f"Error parsing structured response: {e}")
         print(f"Raw content: {content}")
@@ -178,6 +217,49 @@ def generate_image(image_prompt):
     img_data = requests.get(image_url).content
     with open("temp_image.png", "wb") as f:
         f.write(img_data)
+    return "temp_image.png"
+
+
+def create_meme_image(top_text, bottom_text, base_image_path):
+    """Create a classic meme with white text on top and bottom"""
+    img = Image.open(base_image_path)
+    draw = ImageDraw.Draw(img)
+    
+    # Try to use Impact font, fallback to default
+    try:
+        # Try common Impact font locations
+        font_size = int(img.height * 0.1)  # 10% of image height
+        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Impact.ttf", font_size)
+    except:
+        try:
+            font = ImageFont.truetype("Impact.ttf", font_size)
+        except:
+            # Fallback to default if Impact not found
+            font = ImageFont.load_default()
+    
+    # Function to draw text with black outline
+    def draw_text_with_outline(text, position, anchor="mm"):
+        x, y = position
+        # Draw outline (black)
+        outline_range = 3
+        for adj_x in range(-outline_range, outline_range + 1):
+            for adj_y in range(-outline_range, outline_range + 1):
+                draw.text((x + adj_x, y + adj_y), text, font=font, fill="black", anchor=anchor)
+        # Draw text (white)
+        draw.text(position, text, font=font, fill="white", anchor=anchor)
+    
+    # Draw top text
+    if top_text:
+        top_position = (img.width // 2, int(img.height * 0.1))
+        draw_text_with_outline(top_text.upper(), top_position)
+    
+    # Draw bottom text
+    if bottom_text:
+        bottom_position = (img.width // 2, int(img.height * 0.9))
+        draw_text_with_outline(bottom_text.upper(), bottom_position)
+    
+    # Save the meme
+    img.save("temp_image.png")
     return "temp_image.png"
 
 
@@ -257,12 +339,19 @@ def main():
             history = load_history()
 
             try:
-                tweet_text, image_prompt = generate_tweet_and_prompt(history)
+                tweet_text, image_prompt, meme_top, meme_bottom, is_meme = generate_tweet_and_prompt(history)
                 print(f"\nGenerated tweet: {tweet_text}")
                 print(f"Image prompt: {image_prompt}")
+                if is_meme:
+                    print(f"MEME FORMAT - Top: {meme_top}, Bottom: {meme_bottom}")
 
                 image_path = generate_image(image_prompt)
                 print(f"Image generated: {image_path}")
+                
+                # If it's a meme format, add text overlay
+                if is_meme and (meme_top or meme_bottom):
+                    image_path = create_meme_image(meme_top, meme_bottom, image_path)
+                    print(f"Meme text added to image")
 
                 if TEST_MODE:
                     # Test mode: show what would be posted
