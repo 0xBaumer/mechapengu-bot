@@ -81,7 +81,7 @@ def generate_tweet_and_prompt(history):
         Make Abstract look like the future of L2s."""
 
     prev_tweets = "\n".join(history[-3:]) if history else "No previous tweets."
-    prompt = f"{lore}\nPrevious tweets:\n{prev_tweets}\nGenerate a new tweet (under 280 characters) and an image prompt for a cute related image."
+    prompt = f"{lore}\nPrevious tweets:\n{prev_tweets}\n\nGenerate a new tweet (under 280 characters) and an image prompt. The image should be creative and diverse - NOT just moons and rockets every time. Use varied scenarios: Mechapengu doing different activities, in different settings, with different moods and themes. Be creative and avoid repetitive imagery."
 
     response = requests.post(
         "https://api.x.ai/v1/chat/completions",
