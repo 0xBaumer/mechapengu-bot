@@ -3,7 +3,7 @@ import asyncio
 import json
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -18,6 +18,7 @@ PENDING_TWEETS_FILE = "pending_tweets.json"
 
 # Global variable to store approval results
 approval_results = {}
+edit_states = {}  # Track which tweets are being edited
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -26,6 +27,49 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🐧 Mechapengu Approval Bot is ready!\n"
         "I'll send you tweets for approval before posting them."
     )
+
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle text messages for editing tweets"""
+    global approval_results, edit_states
+    
+    chat_id = update.message.chat_id
+    
+    # Check if this chat is editing a tweet
+    if chat_id in edit_states:
+        tweet_id = edit_states[chat_id]
+        new_text = update.message.text
+        
+        # Load pending tweets
+        if os.path.exists(PENDING_TWEETS_FILE):
+            with open(PENDING_TWEETS_FILE, "r") as f:
+                pending_tweets = json.load(f)
+        else:
+            pending_tweets = {}
+        
+        if tweet_id in pending_tweets:
+            # Update the tweet text
+            pending_tweets[tweet_id]['text'] = new_text
+            with open(PENDING_TWEETS_FILE, "w") as f:
+                json.dump(pending_tweets, f)
+            
+            # Store result with edited text
+            approval_results[tweet_id] = {
+                "action": "approve",
+                "tweet_data": pending_tweets[tweet_id]
+            }
+            
+            # Remove from pending
+            del pending_tweets[tweet_id]
+            with open(PENDING_TWEETS_FILE, "w") as f:
+                json.dump(pending_tweets, f)
+            
+            # Clear editing state
+            del edit_states[chat_id]
+            
+            await update.message.reply_text(
+                f"✅ Tweet updated and approved!\n\nNew text: {new_text}\n\nPosting to Twitter..."
+            )
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -67,7 +111,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del pending_tweets[tweet_id]
         with open(PENDING_TWEETS_FILE, "w") as f:
             json.dump(pending_tweets, f)
-            
+    
+    elif action == "edit":
+        # Prompt user to send new text
+        await query.edit_message_caption(
+            caption=f"✏️ EDITING\n\nCurrent text:\n{tweet_data['text']}\n\nSend me the new tweet text (under 280 characters):"
+        )
+        
+        # Set editing state
+        edit_states[query.message.chat_id] = tweet_id
+        
     elif action == "deny":
         # Update message to show denial
         await query.edit_message_caption(
@@ -104,17 +157,18 @@ async def send_approval_request_async(application, tweet_text, preview_image_pat
     with open(PENDING_TWEETS_FILE, "w") as f:
         json.dump(pending_tweets, f)
     
-    # Create inline keyboard with approve/deny buttons
+    # Create inline keyboard with approve/edit/deny buttons
     keyboard = [
         [
             InlineKeyboardButton("✅ Approve", callback_data=f"approve_{tweet_id}"),
+            InlineKeyboardButton("✏️ Edit", callback_data=f"edit_{tweet_id}"),
             InlineKeyboardButton("❌ Deny", callback_data=f"deny_{tweet_id}")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     # Send message with image and buttons
-    message_text = f"🐧 New tweet for approval:\n\n{tweet_text}\n\nApprove to post, Deny to skip."
+    message_text = f"🐧 New tweet for approval:\n\n{tweet_text}\n\nApprove to post as-is, Edit to change text, or Deny to skip."
     
     # Send photo with caption and buttons
     with open(preview_image_path, 'rb') as photo:
@@ -147,6 +201,7 @@ def send_tweet_for_approval(tweet_text, preview_image_path):
         # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(button_callback))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
         
         # Initialize the application
         await application.initialize()
