@@ -84,7 +84,7 @@ def generate_tweet_and_prompt(history):
         - React to market moves, pumps, dumps, and crypto drama
         - Roast rugs, scams, and paper hands
         - Hype bullish narratives (AI agents, L2s, DeFi, memecoins)
-        - Use crypto slang: gm, wagmi, ngmi, ser, anon, rekt, giga brain, cope, fud, ape, degen, etc.
+        - Use crypto slang: gm, wagmi, ngmi, anon, rekt, giga brain, cope, fud, ape, degen, etc.
         - Be funny, edgy, sometimes unhinged
         - No hashtags or dashes in tweets
         - Keep it memeable and viral-worthy
@@ -95,9 +95,9 @@ def generate_tweet_and_prompt(history):
 
     # 2/3 chance to add MECH content
     if random.random() < 2 / 3:
-        lore += """ This tweet should mention $MECH in a hype, memey way. 
-        Talk about it mooning, being undervalued, or being the next 100x. 
-        Make it funny and engaging. Get people to ape in."""
+        lore += """ This tweet should mention $MECH in a hype, memey way.
+        Talk about it in a fun, engaging way without making price predictions or financial claims.
+        Make it funny and memeable."""
 
     # 1/5 chance to mention @AbstractChain
     if random.random() < 1 / 5:
@@ -115,7 +115,7 @@ def generate_tweet_and_prompt(history):
             "Content-Type": "application/json",
         },
         json={
-            "model": "grok-2-1212",  # Using grok-2-1212 which supports structured outputs
+            "model": "grok-3",  # Using grok-3 which supports structured outputs
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 300,
             "response_format": {
