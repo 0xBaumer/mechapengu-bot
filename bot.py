@@ -1,15 +1,14 @@
+import asyncio
 import json
 import os
 import random
-import time
 import requests
 import tweepy
-import fal_client  # pip install fal-client, xai-sdk not needed, using requests for xAI
+import fal_client
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from typing import Literal
 import telegram_handler
 
 # Load environment variables from .env file
@@ -17,7 +16,7 @@ load_dotenv()
 
 # API keys - set these as environment variables for security
 XAI_API_KEY = os.getenv("XAI_API_KEY")
-FAL_KEY = os.getenv("FAL_KEY")  # fal.ai uses auth via env or config
+FAL_KEY = os.getenv("FAL_KEY")
 TWITTER_CONSUMER_KEY = os.getenv("TWITTER_CONSUMER_KEY")
 TWITTER_CONSUMER_SECRET = os.getenv("TWITTER_CONSUMER_SECRET")
 TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
@@ -58,10 +57,10 @@ class TweetResponse(BaseModel):
 def generate_tweet_and_prompt(history):
     # 50% chance to make a classic meme format
     is_meme_format = random.random() < 0.5
-    
+
     if is_meme_format:
         lore = """You are Mechapengu, a degen meme lord. Generate a CLASSIC MEME FORMAT post.
-        
+
         MEME RULES:
         - Create stupid, provocative, trending crypto memes
         - Use classic meme templates mentally (Drake, Distracted Boyfriend, Expanding Brain, etc.)
@@ -70,15 +69,15 @@ def generate_tweet_and_prompt(history):
         - Make it about crypto trends, $MECH, market moves, or degen culture
         - Be unhinged, stupid, and provocative - what actually works on Twitter
         - NO hashtags or dashes
-        
+
         Your response must include:
         - tweet: Short caption for the meme (can be emojis or brief text)
         - image_prompt: Description of meme image (the visual, not the text)
         - meme_top_text: Text for TOP of image (short, punchy)
         - meme_bottom_text: Text for BOTTOM of image (short, punchy)"""
     else:
-        lore = """You are Mechapengu, a degen penguin robot in the crypto space. You're here to farm engagement and make MECH/Mecha Pengu token moon. 
-        
+        lore = """You are Mechapengu, a degen penguin robot in the crypto space. You're here to farm engagement and make MECH/Mecha Pengu token moon.
+
         Your style:
         - Post spicy crypto memes and trending topics from crypto Twitter
         - React to market moves, pumps, dumps, and crypto drama
@@ -88,9 +87,9 @@ def generate_tweet_and_prompt(history):
         - Be funny, edgy, sometimes unhinged
         - No hashtags or dashes in tweets
         - Keep it memeable and viral-worthy
-        
+
         Focus on Abstract chain L2 and the broader crypto ecosystem trends.
-        
+
         Set meme_top_text and meme_bottom_text to empty strings."""
 
     # 2/3 chance to add MECH content
@@ -101,8 +100,8 @@ def generate_tweet_and_prompt(history):
 
     # 1/5 chance to mention @AbstractChain
     if random.random() < 1 / 5:
-        lore += """ Mention @AbstractChain in this tweet. 
-        Hype the tech, the ecosystem, or just give them a based shoutout. 
+        lore += """ Mention @AbstractChain in this tweet.
+        Hype the tech, the ecosystem, or just give them a based shoutout.
         Make Abstract look like the future of L2s."""
 
     prev_tweets = "\n".join(history[-3:]) if history else "No previous tweets."
@@ -115,7 +114,7 @@ def generate_tweet_and_prompt(history):
             "Content-Type": "application/json",
         },
         json={
-            "model": "grok-3",  # Using grok-3 which supports structured outputs
+            "model": "grok-3",
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 300,
             "response_format": {
@@ -224,7 +223,7 @@ def create_meme_image(top_text, bottom_text, base_image_path):
     """Create a classic meme with white text on top and bottom"""
     img = Image.open(base_image_path)
     draw = ImageDraw.Draw(img)
-    
+
     # Try to use Impact font, fallback to default
     try:
         # Try common Impact font locations
@@ -236,7 +235,7 @@ def create_meme_image(top_text, bottom_text, base_image_path):
         except:
             # Fallback to default if Impact not found
             font = ImageFont.load_default()
-    
+
     # Function to draw text with black outline
     def draw_text_with_outline(text, position, anchor="mm"):
         x, y = position
@@ -247,17 +246,17 @@ def create_meme_image(top_text, bottom_text, base_image_path):
                 draw.text((x + adj_x, y + adj_y), text, font=font, fill="black", anchor=anchor)
         # Draw text (white)
         draw.text(position, text, font=font, fill="white", anchor=anchor)
-    
+
     # Draw top text
     if top_text:
         top_position = (img.width // 2, int(img.height * 0.1))
         draw_text_with_outline(top_text.upper(), top_position)
-    
+
     # Draw bottom text
     if bottom_text:
         bottom_position = (img.width // 2, int(img.height * 0.9))
         draw_text_with_outline(bottom_text.upper(), bottom_position)
-    
+
     # Save the meme
     img.save("temp_image.png")
     return "temp_image.png"
@@ -327,160 +326,127 @@ def check_api_keys():
     return True
 
 
-def main():
+async def run_generation_cycle(application, history):
+    """Run a single generation cycle: generate tweet + image, get approval, post."""
+    telegram_handler.set_generation_in_progress(True)
+    try:
+        # Run blocking generation calls in a thread to keep Telegram responsive
+        tweet_text, image_prompt, meme_top, meme_bottom, is_meme = await asyncio.to_thread(
+            generate_tweet_and_prompt, history
+        )
+        print(f"\nGenerated tweet: {tweet_text}")
+        print(f"Image prompt: {image_prompt}")
+        if is_meme:
+            print(f"MEME FORMAT - Top: {meme_top}, Bottom: {meme_bottom}")
+
+        image_path = await asyncio.to_thread(generate_image, image_prompt)
+        print(f"Image generated: {image_path}")
+
+        # If it's a meme format, add text overlay
+        if is_meme and (meme_top or meme_bottom):
+            image_path = await asyncio.to_thread(create_meme_image, meme_top, meme_bottom, image_path)
+            print("Meme text added to image")
+
+        if TEST_MODE:
+            print(f"Test mode: Would post tweet with text: {tweet_text}")
+            if os.path.exists(image_path):
+                os.remove(image_path)
+            return
+
+        if application and TELEGRAM_APPROVAL:
+            print("Sending tweet to Telegram for approval...")
+            result = await telegram_handler.send_and_wait_for_approval(
+                application, tweet_text, image_path
+            )
+
+            if result["action"] == "approve":
+                final_tweet_text = result["tweet_data"]["text"]
+                print("Tweet approved! Posting to Twitter...")
+                await asyncio.to_thread(post_tweet, final_tweet_text, image_path)
+                history.append(final_tweet_text)
+                save_history(history)
+                print("Tweet posted successfully!")
+                await telegram_handler.send_notification(
+                    application, "✅ Tweet posted successfully to Twitter!"
+                )
+            elif result["action"] == "deny":
+                print("Tweet denied. Will generate a new one in the next cycle.")
+            elif result["action"] == "timeout":
+                print("Approval timed out. Skipping this tweet.")
+        else:
+            # No approval needed, post directly
+            print("Posting directly to Twitter...")
+            await asyncio.to_thread(post_tweet, tweet_text, image_path)
+            history.append(tweet_text)
+            save_history(history)
+            print("Tweet posted successfully!")
+
+        # Clean up
+        if os.path.exists(image_path):
+            os.remove(image_path)
+
+    finally:
+        telegram_handler.set_generation_in_progress(False)
+
+
+async def main():
     """Main bot loop"""
     if not check_api_keys():
         return
 
     print(f"Starting Mechapengu bot (TEST_MODE={TEST_MODE})")
 
+    application = None
+    if not TEST_MODE and (TELEGRAM_APPROVAL or telegram_handler.check_telegram_config()):
+        application = telegram_handler.build_application()
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(
+            drop_pending_updates=True,
+            poll_interval=1.0,
+            timeout=30,
+        )
+        print("Telegram bot started. Use /generate to trigger a tweet immediately.")
+
     try:
         while True:
             history = load_history()
 
             try:
-                tweet_text, image_prompt, meme_top, meme_bottom, is_meme = generate_tweet_and_prompt(history)
-                print(f"\nGenerated tweet: {tweet_text}")
-                print(f"Image prompt: {image_prompt}")
-                if is_meme:
-                    print(f"MEME FORMAT - Top: {meme_top}, Bottom: {meme_bottom}")
-
-                image_path = generate_image(image_prompt)
-                print(f"Image generated: {image_path}")
-                
-                # If it's a meme format, add text overlay
-                if is_meme and (meme_top or meme_bottom):
-                    image_path = create_meme_image(meme_top, meme_bottom, image_path)
-                    print(f"Meme text added to image")
-
-                if TEST_MODE:
-                    # Test mode: show what would be posted
-                    print(f"Test mode: Would post tweet with text: {tweet_text}")
-                    print(f"Test mode: Would post with image: {image_path}")
-                    print("Tweet would be posted with this content and image.")
-
-                    # Clean up the temp image
-                    os.remove(image_path)
-
-                    # In test mode, break after one iteration or use shorter sleep
-                    print(
-                        "\nTest mode: Waiting 30 seconds before next tweet (or press Ctrl+C to stop)"
-                    )
-                    time.sleep(30)
-                else:
-                    # Production mode: send to Telegram for approval first
-
-                    # Check if Telegram approval is required
-                    if TELEGRAM_APPROVAL:
-                        # Telegram approval is mandatory - config already validated in check_api_keys()
-                        print("Sending tweet to Telegram for approval...")
-
-                        try:
-                            # Send for approval and wait for response
-                            result = telegram_handler.send_tweet_for_approval(
-                                tweet_text, image_path
-                            )
-
-                            if result["action"] == "approve":
-                                print("Tweet approved! Posting to Twitter...")
-                                # Use the tweet text from result (in case it was edited)
-                                final_tweet_text = result["tweet_data"]["text"]
-                                post_tweet(final_tweet_text, image_path)
-                                history.append(final_tweet_text)
-                                save_history(history)
-                                print(f"Tweet posted successfully!")
-
-                                # Send confirmation to Telegram
-                                telegram_handler.send_notification(
-                                    "✅ Tweet posted successfully to Twitter!"
-                                )
-
-                            elif result["action"] == "deny":
-                                print(
-                                    "Tweet denied. Will generate a new one in the next cycle."
-                                )
-                                # Don't add to history, will generate new one
-
-                            elif result["action"] == "timeout":
-                                print("Approval timed out. Skipping this tweet.")
-
-                        except Exception as e:
-                            print(f"Error with Telegram approval: {e}")
-                            print(
-                                "Cannot continue without approval when TELEGRAM_APPROVAL is enabled."
-                            )
-                            # Skip this tweet and continue to next cycle
-                    elif telegram_handler.check_telegram_config():
-                        # Telegram is configured but not required - use it if available
-                        print("Sending tweet to Telegram for optional approval...")
-
-                        try:
-                            # Send for approval and wait for response
-                            result = telegram_handler.send_tweet_for_approval(
-                                tweet_text, image_path
-                            )
-
-                            if result["action"] == "approve":
-                                print("Tweet approved! Posting to Twitter...")
-                                # Use the tweet text from result (in case it was edited)
-                                final_tweet_text = result["tweet_data"]["text"]
-                                post_tweet(final_tweet_text, image_path)
-                                history.append(final_tweet_text)
-                                save_history(history)
-                                print(f"Tweet posted successfully!")
-
-                                # Send confirmation to Telegram
-                                telegram_handler.send_notification(
-                                    "✅ Tweet posted successfully to Twitter!"
-                                )
-
-                            elif result["action"] == "deny":
-                                print(
-                                    "Tweet denied. Will generate a new one in the next cycle."
-                                )
-                                # Don't add to history, will generate new one
-
-                            elif result["action"] == "timeout":
-                                print("Approval timed out. Skipping this tweet.")
-
-                        except Exception as e:
-                            print(f"Error with Telegram approval: {e}")
-                            print("Continuing without approval...")
-                            # Post anyway since approval is optional
-                            post_tweet(tweet_text, image_path)
-                            history.append(tweet_text)
-                            save_history(history)
-                            print(f"Tweet posted successfully!")
-                    else:
-                        # No Telegram config and not required, post directly
-                        print("Posting directly to Twitter...")
-                        post_tweet(tweet_text, image_path)
-                        history.append(tweet_text)
-                        save_history(history)
-                        print(f"Tweet posted successfully!")
-
-                    # Clean up files
-                    if os.path.exists(image_path):
-                        os.remove(image_path)
-
-                    sleep_time = random.uniform(
-                        1800, 3600
-                    )  # 30 to 60 minutes in seconds
-                    print(f"Waiting {sleep_time/60:.1f} minutes until next tweet...")
-                    time.sleep(sleep_time)
-
+                await run_generation_cycle(application, history)
             except Exception as e:
                 print(f"\nError occurred: {e}")
-                if TEST_MODE:
-                    print("Test mode: Waiting 30 seconds before retry...")
-                    time.sleep(30)
-                else:
-                    print("Waiting 5 minutes before retry...")
-                    time.sleep(300)  # Wait 5 minutes before retry in production
+                if application:
+                    try:
+                        await telegram_handler.send_notification(
+                            application, f"⚠️ Error during generation: {e}"
+                        )
+                    except:
+                        pass
+
+            # Wait for next cycle: either /generate command or timer
+            if application:
+                sleep_time = random.uniform(1800, 3600)
+                print(f"\nWaiting {sleep_time/60:.1f} minutes until next tweet (or use /generate)...")
+                trigger = await telegram_handler.wait_for_trigger(timeout=sleep_time)
+                if trigger == "generate":
+                    print("\nManual generation triggered via /generate!")
+            elif TEST_MODE:
+                print("\nTest mode: Waiting 30 seconds before next tweet...")
+                await asyncio.sleep(30)
+            else:
+                sleep_time = random.uniform(1800, 3600)
+                print(f"\nWaiting {sleep_time/60:.1f} minutes until next tweet...")
+                await asyncio.sleep(sleep_time)
 
     except KeyboardInterrupt:
         print("\nBot stopped by user")
+    finally:
+        if application:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

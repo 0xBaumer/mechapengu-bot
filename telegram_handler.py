@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.request import HTTPXRequest
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -16,57 +17,81 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 # File to store pending tweets
 PENDING_TWEETS_FILE = "pending_tweets.json"
 
-# Global variable to store approval results
+# Global state
 approval_results = {}
-edit_states = {}  # Track which tweets are being edited
+edit_states = {}
+generation_in_progress = False
+
+# Event that /generate sets to wake up the main loop
+_generate_event = None
+
+
+def _get_generate_event():
+    global _generate_event
+    if _generate_event is None:
+        _generate_event = asyncio.Event()
+    return _generate_event
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     await update.message.reply_text(
         "🐧 Mechapengu Approval Bot is ready!\n"
-        "I'll send you tweets for approval before posting them."
+        "I'll send you tweets for approval before posting them.\n\n"
+        "Commands:\n"
+        "/generate - Generate a new tweet immediately"
     )
+
+
+async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /generate command - triggers immediate tweet generation"""
+    if generation_in_progress:
+        await update.message.reply_text(
+            "⏳ A tweet is already being generated or awaiting approval. Please wait."
+        )
+        return
+    await update.message.reply_text("🐧 Generating a new tweet...")
+    _get_generate_event().set()
 
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages for editing tweets"""
     global approval_results, edit_states
-    
+
     chat_id = update.message.chat_id
-    
+
     # Check if this chat is editing a tweet
     if chat_id in edit_states:
         tweet_id = edit_states[chat_id]
         new_text = update.message.text
-        
+
         # Load pending tweets
         if os.path.exists(PENDING_TWEETS_FILE):
             with open(PENDING_TWEETS_FILE, "r") as f:
                 pending_tweets = json.load(f)
         else:
             pending_tweets = {}
-        
+
         if tweet_id in pending_tweets:
             # Update the tweet text
             pending_tweets[tweet_id]['text'] = new_text
             with open(PENDING_TWEETS_FILE, "w") as f:
                 json.dump(pending_tweets, f)
-            
+
             # Store result with edited text
             approval_results[tweet_id] = {
                 "action": "approve",
                 "tweet_data": pending_tweets[tweet_id]
             }
-            
+
             # Remove from pending
             del pending_tweets[tweet_id]
             with open(PENDING_TWEETS_FILE, "w") as f:
                 json.dump(pending_tweets, f)
-            
+
             # Clear editing state
             del edit_states[chat_id]
-            
+
             await update.message.reply_text(
                 f"✅ Tweet updated and approved!\n\nNew text: {new_text}\n\nPosting to Twitter..."
             )
@@ -75,89 +100,123 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button presses"""
     global approval_results
-    
+
     query = update.callback_query
     await query.answer()
-    
+
     # Parse callback data
     action, tweet_id = query.data.split("_", 1)
-    
+
     # Load pending tweets
     if os.path.exists(PENDING_TWEETS_FILE):
         with open(PENDING_TWEETS_FILE, "r") as f:
             pending_tweets = json.load(f)
     else:
         pending_tweets = {}
-    
+
     # Get pending tweet data
     if tweet_id not in pending_tweets:
         await query.edit_message_caption(
             caption="❌ Tweet data not found. It may have already been processed."
         )
         return
-    
+
     tweet_data = pending_tweets[tweet_id]
-    
+
     if action == "approve":
-        # Update message to show approval
         await query.edit_message_caption(
             caption=f"✅ APPROVED\n\n{tweet_data['text']}\n\nPosting to Twitter..."
         )
-        
-        # Store result
         approval_results[tweet_id] = {"action": "approve", "tweet_data": tweet_data}
-        
-        # Remove from pending
+
         del pending_tweets[tweet_id]
         with open(PENDING_TWEETS_FILE, "w") as f:
             json.dump(pending_tweets, f)
-    
+
     elif action == "edit":
-        # Prompt user to send new text
         await query.edit_message_caption(
             caption=f"✏️ EDITING\n\nCurrent text:\n{tweet_data['text']}\n\nSend me the new tweet text (under 280 characters):"
         )
-        
-        # Set editing state
         edit_states[query.message.chat_id] = tweet_id
-        
+
     elif action == "deny":
-        # Update message to show denial
         await query.edit_message_caption(
             caption=f"❌ DENIED\n\n{tweet_data['text']}\n\nGenerating new tweet..."
         )
-        
-        # Store result
         approval_results[tweet_id] = {"action": "deny", "tweet_data": tweet_data}
-        
-        # Remove from pending
+
         del pending_tweets[tweet_id]
         with open(PENDING_TWEETS_FILE, "w") as f:
             json.dump(pending_tweets, f)
 
 
-async def send_approval_request_async(application, tweet_text, preview_image_path):
-    """Send a tweet for approval to Telegram (async version)"""
-    # Generate unique ID for this tweet
+def build_application():
+    """Build a persistent Telegram Application with resilient HTTP settings and all handlers."""
+    request = HTTPXRequest(
+        connect_timeout=20.0,
+        read_timeout=60.0,
+        write_timeout=20.0,
+        pool_timeout=10.0,
+        connection_pool_size=8,
+    )
+    application = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .request(request)
+        .get_updates_request(HTTPXRequest(
+            connect_timeout=20.0,
+            read_timeout=60.0,
+            write_timeout=20.0,
+            pool_timeout=10.0,
+            connection_pool_size=8,
+        ))
+        .build()
+    )
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("generate", generate_command))
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+
+    return application
+
+
+async def wait_for_trigger(timeout):
+    """Wait for /generate command or timeout. Returns 'generate' or 'timer'."""
+    event = _get_generate_event()
+    event.clear()
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+        return "generate"
+    except asyncio.TimeoutError:
+        return "timer"
+
+
+def set_generation_in_progress(in_progress):
+    global generation_in_progress
+    generation_in_progress = in_progress
+
+
+async def send_and_wait_for_approval(application, tweet_text, preview_image_path, timeout=86400):
+    """Send tweet for approval using the persistent bot and wait for response."""
     tweet_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
     # Store pending tweet data
     if os.path.exists(PENDING_TWEETS_FILE):
         with open(PENDING_TWEETS_FILE, "r") as f:
             pending_tweets = json.load(f)
     else:
         pending_tweets = {}
-    
+
     pending_tweets[tweet_id] = {
         "text": tweet_text,
         "preview_path": preview_image_path,
         "timestamp": datetime.now().isoformat()
     }
-    
     with open(PENDING_TWEETS_FILE, "w") as f:
         json.dump(pending_tweets, f)
-    
-    # Create inline keyboard with approve/edit/deny buttons
+
+    # Create inline keyboard
     keyboard = [
         [
             InlineKeyboardButton("✅ Approve", callback_data=f"approve_{tweet_id}"),
@@ -166,11 +225,8 @@ async def send_approval_request_async(application, tweet_text, preview_image_pat
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Send message with image and buttons
     message_text = f"🐧 New tweet for approval:\n\n{tweet_text}\n\nApprove to post as-is, Edit to change text, or Deny to skip."
-    
-    # Send photo with caption and buttons
+
     with open(preview_image_path, 'rb') as photo:
         await application.bot.send_photo(
             chat_id=TELEGRAM_CHAT_ID,
@@ -178,97 +234,23 @@ async def send_approval_request_async(application, tweet_text, preview_image_pat
             caption=message_text,
             reply_markup=reply_markup
         )
-    
-    return tweet_id
+
+    # Wait for approval/denial
+    start_time = datetime.now()
+    while (datetime.now() - start_time).total_seconds() < timeout:
+        if tweet_id in approval_results:
+            return approval_results.pop(tweet_id)
+        await asyncio.sleep(1)
+
+    return {"action": "timeout", "tweet_data": {"text": tweet_text}}
 
 
-async def send_notification_async(application, message):
-    """Send a notification message to Telegram (async version)"""
+async def send_notification(application, message):
+    """Send a notification message to Telegram."""
     await application.bot.send_message(
         chat_id=TELEGRAM_CHAT_ID,
         text=message
     )
-
-
-def send_tweet_for_approval(tweet_text, preview_image_path):
-    """Send tweet for approval and wait for response (blocking)"""
-    global approval_results
-    
-    async def run_approval_bot():
-        # Create application
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(button_callback))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-        
-        # Initialize the application
-        await application.initialize()
-        await application.start()
-        
-        # Send approval request
-        tweet_id = await send_approval_request_async(application, tweet_text, preview_image_path)
-        
-        # Start polling for updates
-        await application.updater.start_polling()
-        
-        # Wait for approval/denial (max 24 hours)
-        timeout = 86400  # 24 hours in seconds
-        start_time = datetime.now()
-        
-        while (datetime.now() - start_time).seconds < timeout:
-            # Check if we have a result
-            if tweet_id in approval_results:
-                result = approval_results[tweet_id]
-                del approval_results[tweet_id]  # Clean up
-                
-                # Stop the application
-                await application.updater.stop()
-                await application.stop()
-                await application.shutdown()
-                
-                return result
-            
-            await asyncio.sleep(1)
-        
-        # Timeout - clean up
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
-        
-        # Send timeout notification
-        await send_notification_async(application, "⏰ Tweet approval timed out after 24 hours. Skipping...")
-        
-        return {"action": "timeout", "tweet_data": {"text": tweet_text}}
-    
-    # Run the async function
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        result = loop.run_until_complete(run_approval_bot())
-        return result
-    finally:
-        loop.close()
-
-
-def send_notification(message):
-    """Send a simple notification to Telegram (blocking)"""
-    async def _send():
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        await application.initialize()
-        await application.bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=message
-        )
-        await application.shutdown()
-    
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(_send())
-    finally:
-        loop.close()
 
 
 def check_telegram_config():
