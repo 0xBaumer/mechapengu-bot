@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import signal
 import requests
 import tweepy
 import fal_client
@@ -327,7 +328,8 @@ def check_api_keys():
 
 
 async def run_generation_cycle(application, history):
-    """Run a single generation cycle: generate tweet + image, get approval, post."""
+    """Run a single generation cycle: generate tweet + image, get approval, post.
+    Returns the action result: 'approve', 'deny', 'timeout', or 'direct'."""
     telegram_handler.set_generation_in_progress(True)
     try:
         # Run blocking generation calls in a thread to keep Telegram responsive
@@ -351,7 +353,7 @@ async def run_generation_cycle(application, history):
             print(f"Test mode: Would post tweet with text: {tweet_text}")
             if os.path.exists(image_path):
                 os.remove(image_path)
-            return
+            return "direct"
 
         if application and TELEGRAM_APPROVAL:
             print("Sending tweet to Telegram for approval...")
@@ -359,7 +361,9 @@ async def run_generation_cycle(application, history):
                 application, tweet_text, image_path
             )
 
-            if result["action"] == "approve":
+            action = result["action"]
+
+            if action == "approve":
                 final_tweet_text = result["tweet_data"]["text"]
                 print("Tweet approved! Posting to Twitter...")
                 await asyncio.to_thread(post_tweet, final_tweet_text, image_path)
@@ -369,9 +373,9 @@ async def run_generation_cycle(application, history):
                 await telegram_handler.send_notification(
                     application, "✅ Tweet posted successfully to Twitter!"
                 )
-            elif result["action"] == "deny":
-                print("Tweet denied. Will generate a new one in the next cycle.")
-            elif result["action"] == "timeout":
+            elif action == "deny":
+                print("Tweet denied. Generating a new one immediately...")
+            elif action == "timeout":
                 print("Approval timed out. Skipping this tweet.")
         else:
             # No approval needed, post directly
@@ -380,10 +384,13 @@ async def run_generation_cycle(application, history):
             history.append(tweet_text)
             save_history(history)
             print("Tweet posted successfully!")
+            action = "direct"
 
         # Clean up
         if os.path.exists(image_path):
             os.remove(image_path)
+
+        return action
 
     finally:
         telegram_handler.set_generation_in_progress(False)
@@ -400,20 +407,36 @@ async def main():
     if not TEST_MODE and (TELEGRAM_APPROVAL or telegram_handler.check_telegram_config()):
         application = telegram_handler.build_application()
         await application.initialize()
+
+        # Clear any existing webhook/polling connections from a previous instance
+        # (e.g. during Railway redeploys where old and new containers overlap)
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        await asyncio.sleep(3)  # give the old instance time to shut down
+
         await application.start()
         await application.updater.start_polling(
             drop_pending_updates=True,
-            poll_interval=1.0,
+            poll_interval=2.0,
             timeout=30,
         )
         print("Telegram bot started. Use /generate to trigger a tweet immediately.")
 
+    # Handle SIGTERM from Railway so the bot shuts down cleanly before new instance starts
+    shutdown_event = asyncio.Event()
+
+    def handle_sigterm(*_):
+        print("\nReceived SIGTERM, shutting down gracefully...")
+        shutdown_event.set()
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
     try:
-        while True:
+        while not shutdown_event.is_set():
             history = load_history()
 
+            action = None
             try:
-                await run_generation_cycle(application, history)
+                action = await run_generation_cycle(application, history)
             except Exception as e:
                 print(f"\nError occurred: {e}")
                 if application:
@@ -424,10 +447,20 @@ async def main():
                     except:
                         pass
 
-            # Wait for next cycle: either /generate command or timer
+            # If denied, generate a new tweet immediately (no wait)
+            if action == "deny":
+                continue
+
+            # On error, wait 5 minutes before retrying
+            if action is None:
+                print("\nError occurred, retrying in 5 minutes...")
+                await asyncio.sleep(300)
+                continue
+
+            # Wait ~24 hours for next cycle (or /generate for manual trigger)
             if application:
-                sleep_time = random.uniform(1800, 3600)
-                print(f"\nWaiting {sleep_time/60:.1f} minutes until next tweet (or use /generate)...")
+                sleep_time = random.uniform(82800, 90000)  # ~23-25 hours
+                print(f"\nWaiting {sleep_time/3600:.1f} hours until next tweet (or use /generate)...")
                 trigger = await telegram_handler.wait_for_trigger(timeout=sleep_time)
                 if trigger == "generate":
                     print("\nManual generation triggered via /generate!")
@@ -435,8 +468,8 @@ async def main():
                 print("\nTest mode: Waiting 30 seconds before next tweet...")
                 await asyncio.sleep(30)
             else:
-                sleep_time = random.uniform(1800, 3600)
-                print(f"\nWaiting {sleep_time/60:.1f} minutes until next tweet...")
+                sleep_time = random.uniform(82800, 90000)  # ~23-25 hours
+                print(f"\nWaiting {sleep_time/3600:.1f} hours until next tweet...")
                 await asyncio.sleep(sleep_time)
 
     except KeyboardInterrupt:

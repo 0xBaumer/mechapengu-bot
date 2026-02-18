@@ -104,50 +104,60 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # Parse callback data
-    action, tweet_id = query.data.split("_", 1)
+    try:
+        # Parse callback data
+        action, tweet_id = query.data.split("_", 1)
 
-    # Load pending tweets
-    if os.path.exists(PENDING_TWEETS_FILE):
-        with open(PENDING_TWEETS_FILE, "r") as f:
-            pending_tweets = json.load(f)
-    else:
-        pending_tweets = {}
+        # Load pending tweets
+        if os.path.exists(PENDING_TWEETS_FILE):
+            with open(PENDING_TWEETS_FILE, "r") as f:
+                pending_tweets = json.load(f)
+        else:
+            pending_tweets = {}
 
-    # Get pending tweet data
-    if tweet_id not in pending_tweets:
-        await query.edit_message_caption(
-            caption="❌ Tweet data not found. It may have already been processed."
-        )
-        return
+        # Get pending tweet data
+        if tweet_id not in pending_tweets:
+            await query.edit_message_caption(
+                caption="❌ Tweet data not found. It may have already been processed."
+            )
+            return
 
-    tweet_data = pending_tweets[tweet_id]
+        tweet_data = pending_tweets[tweet_id]
 
-    if action == "approve":
-        await query.edit_message_caption(
-            caption=f"✅ APPROVED\n\n{tweet_data['text']}\n\nPosting to Twitter..."
-        )
-        approval_results[tweet_id] = {"action": "approve", "tweet_data": tweet_data}
+        if action == "approve":
+            await query.edit_message_caption(
+                caption=f"✅ APPROVED\n\n{tweet_data['text']}\n\nPosting to Twitter..."
+            )
+            approval_results[tweet_id] = {"action": "approve", "tweet_data": tweet_data}
 
-        del pending_tweets[tweet_id]
-        with open(PENDING_TWEETS_FILE, "w") as f:
-            json.dump(pending_tweets, f)
+            del pending_tweets[tweet_id]
+            with open(PENDING_TWEETS_FILE, "w") as f:
+                json.dump(pending_tweets, f)
 
-    elif action == "edit":
-        await query.edit_message_caption(
-            caption=f"✏️ EDITING\n\nCurrent text:\n{tweet_data['text']}\n\nSend me the new tweet text (under 280 characters):"
-        )
-        edit_states[query.message.chat_id] = tweet_id
+        elif action == "edit":
+            await query.edit_message_caption(
+                caption=f"✏️ EDITING\n\nCurrent text:\n{tweet_data['text']}\n\nSend me the new tweet text (under 280 characters):"
+            )
+            edit_states[query.message.chat_id] = tweet_id
 
-    elif action == "deny":
-        await query.edit_message_caption(
-            caption=f"❌ DENIED\n\n{tweet_data['text']}\n\nGenerating new tweet..."
-        )
-        approval_results[tweet_id] = {"action": "deny", "tweet_data": tweet_data}
+        elif action == "deny":
+            await query.edit_message_caption(
+                caption=f"❌ DENIED\n\n{tweet_data['text']}\n\nGenerating new tweet..."
+            )
+            approval_results[tweet_id] = {"action": "deny", "tweet_data": tweet_data}
 
-        del pending_tweets[tweet_id]
-        with open(PENDING_TWEETS_FILE, "w") as f:
-            json.dump(pending_tweets, f)
+            del pending_tweets[tweet_id]
+            with open(PENDING_TWEETS_FILE, "w") as f:
+                json.dump(pending_tweets, f)
+
+    except Exception as e:
+        print(f"Error in button_callback: {e}")
+        try:
+            await query.edit_message_caption(
+                caption=f"❌ Error processing button: {e}"
+            )
+        except:
+            pass
 
 
 def build_application():
