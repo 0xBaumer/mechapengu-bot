@@ -24,7 +24,7 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 
 # Test mode configuration
-TEST_MODE = False  # Set to False to actually post tweets
+TEST_MODE = True  # Set to False to actually post tweets
 TELEGRAM_APPROVAL = True
 
 HISTORY_FILE = "tweet_history.json"
@@ -430,6 +430,7 @@ async def main():
 
     signal.signal(signal.SIGTERM, handle_sigterm)
 
+    consecutive_errors = 0
     try:
         while not shutdown_event.is_set():
             history = load_history()
@@ -437,24 +438,52 @@ async def main():
             action = None
             try:
                 action = await run_generation_cycle(application, history)
+                consecutive_errors = 0  # Reset on success
             except Exception as e:
+                error_str = str(e)
                 print(f"\nError occurred: {e}")
-                if application:
-                    try:
-                        await telegram_handler.send_notification(
-                            application, f"⚠️ Error during generation: {e}"
-                        )
-                    except:
-                        pass
+
+                # Detect fatal/unrecoverable errors (credits exhausted, etc.)
+                is_fatal = any(phrase in error_str for phrase in [
+                    "resource has been exhausted",
+                    "spending limit",
+                    "used all available credits",
+                    "monthly spending limit",
+                ])
+
+                consecutive_errors += 1
+
+                if is_fatal:
+                    msg = f"⛔ Fatal API error (credits exhausted). Bot pausing for 6 hours.\n\n{e}"
+                    print(f"\n{msg}")
+                    if application:
+                        try:
+                            await telegram_handler.send_notification(application, msg)
+                        except:
+                            pass
+                    await asyncio.sleep(6 * 3600)
+                    consecutive_errors = 0
+                    continue
+                else:
+                    # Exponential backoff: 5min, 10min, 20min, ... capped at 2 hours
+                    wait_minutes = min(5 * (2 ** (consecutive_errors - 1)), 120)
+                    if application and consecutive_errors <= 3:  # Only notify first few times
+                        try:
+                            await telegram_handler.send_notification(
+                                application, f"⚠️ Error during generation: {e}"
+                            )
+                        except:
+                            pass
 
             # If denied, generate a new tweet immediately (no wait)
             if action == "deny":
                 continue
 
-            # On error, wait 5 minutes before retrying
+            # On error, wait with backoff before retrying
             if action is None:
-                print("\nError occurred, retrying in 5 minutes...")
-                await asyncio.sleep(300)
+                wait_minutes = min(5 * (2 ** max(consecutive_errors - 1, 0)), 120)
+                print(f"\nError occurred, retrying in {wait_minutes} minutes...")
+                await asyncio.sleep(wait_minutes * 60)
                 continue
 
             # Wait ~24 hours for next cycle (or /generate for manual trigger)
